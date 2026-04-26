@@ -4,21 +4,13 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST(request) {
   try {
-    const { agents, scenario } = await request.json();
+    const { agents, scenario, selectedAttributes } = await request.json();
 
-    // Στέλνουμε όλους τους agents ταυτόχρονα στο Groq
     const agentPromises = agents.map(async (agent) => {
-      const profile = `
-        Ηλικία: ${agent.age}
-        Αρχέτυπο: ${agent.archetype}
-        Εισόδημα: ${agent.income}
-        Εργασία: ${agent.employment}
-        Περιοχή: ${agent.neighborhood}
-        Οικογενειακή κατάσταση: ${agent.marital}
-        Εκπαίδευση: ${agent.education}
-        Price Sensitivity Score: ${agent.price_sensitivity_score}
-        Disposable Income: ${agent.disposable_income}€
-      `;
+      const profile = (selectedAttributes || [])
+        .filter(key => agent[key] !== undefined)
+        .map(key => `${key}: ${agent[key]}`)
+        .join("\n");
 
       const completion = await groq.chat.completions.create({
         model: "llama-3.3-70b-versatile",
@@ -45,7 +37,6 @@ PROBABILITY_TO_ACT: [0-10]`,
 
       const text = completion.choices[0].message.content;
 
-      // Διαβάζουμε την απάντηση
       const getField = (key) => {
         const match = text.match(new RegExp(`${key}:\\s*(.+?)(?=\\n[A-Z_]+:|$)`, "is"));
         return match ? match[1].trim() : null;
@@ -66,14 +57,12 @@ PROBABILITY_TO_ACT: [0-10]`,
       };
     });
 
-    // Περιμένουμε όλους τους agents
     const results = await Promise.allSettled(agentPromises);
 
     const agentResults = results.map((r) =>
       r.status === "fulfilled" ? r.value : { error: r.reason?.message }
     );
 
-    // Υπολογίζουμε συγκεντρωτικά
     const successful = agentResults.filter((r) => !r.error);
     const positive = successful.filter((r) => r.sentiment === "positive").length;
     const negative = successful.filter((r) => r.sentiment === "negative").length;
@@ -82,7 +71,6 @@ PROBABILITY_TO_ACT: [0-10]`,
     const meanP2A = successful.reduce((s, r) => s + r.probability_to_act, 0) / total;
     const predictedChurn = (negative / total) * (meanP2A / 10);
 
-    // Βρίσκουμε την κυρίαρχη αιτία
     const reasonCounts = {};
     successful.forEach((r) => {
       reasonCounts[r.reason] = (reasonCounts[r.reason] || 0) + 1;
